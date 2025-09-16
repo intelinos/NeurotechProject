@@ -14,6 +14,8 @@ from retinaface import RetinaFace
 TELEGRAM_TOKEN = "8111604463:AAGqn6QXgT6ssMyZNQaZt_LiiQ2ft5MRp14"
 YOUTUBE_API_KEY = "AIzaSyAm0DAHsqepk5o4U3dc1mhFyBB8gpwMVJk"
 
+max_results = 50
+
 # --- Инициализация модели APViT ---
 MODEL = init_model(
     config='configs/apvit/RAF.py',
@@ -31,11 +33,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def search_playlist(emotion, max_results=1):
     try:
+        emotion_to_search = {
+            "Happiness": "Happy",
+            "Sadness": "Sad",
+            "Anger": "Angry",
+            "Surprise": "Surprise",
+            "Disgust": "Disturbing",
+            "Fear": "Scary",
+            "Neutral": "Chill"
+        }
         request = youtube.search().list(
             part="snippet",
-            q=f"{emotion} Music Playlist",
+            q=f"{emotion_to_search.get(emotion)} Music Playlist",
             type="playlist",
-            maxResults=max_results
+            maxResults=max_results,
+            order="relevance"
         )
         response = request.execute()
         items = response.get("items", [])
@@ -54,25 +66,27 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await file.download_to_drive(file_path)
 
     save_path = "aligned_face.jpg"
-    align_and_crop_face(file_path, save_path)
+    if align_and_crop_face(file_path, save_path) is None:
+        message = "Лицо не обнаружено"
+        await update.message.reply_text(message)
+    else:
+        img = mmcv.imread(save_path)
+        result = inference_model(MODEL, img)
+        os.remove(file_path)
 
-    img = mmcv.imread(save_path)
-    result = inference_model(MODEL, img)
-    os.remove(file_path)
+        pred_class = result['pred_class']
+        pred_score = result['pred_score']
 
-    pred_class = result['pred_class']
-    pred_score = result['pred_score']
+        # Динамически ищем плейлист по эмоции
+        playlist_url = search_playlist(pred_class)
 
-    # Динамически ищем плейлист по эмоции
-    playlist_url = search_playlist(pred_class)
+        message = (
+            f"Эмоция: {pred_class}\n"
+            f"Уверенность: {pred_score:.2%}\n"
+            f"Рекомендованный плейлист: {playlist_url}"
+        )
 
-    message = (
-        f"Эмоция: {pred_class}\n"
-        f"Уверенность: {pred_score:.2%}\n"
-        f"Рекомендованный плейлист: {playlist_url}"
-    )
-
-    await update.message.reply_text(message)
+        await update.message.reply_text(message)
 
 def align_and_crop_face(image_path, save_path="aligned_face.jpg", target_size=224):
     img = cv2.imread(image_path)
